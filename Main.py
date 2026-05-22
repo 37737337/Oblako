@@ -1,6 +1,6 @@
 # =========================================================
 # FILESHIELD CLOUD
-# REAL WORKING FINAL
+# ULTRA STABLE VERSION
 # =========================================================
 
 import asyncio
@@ -9,7 +9,6 @@ import random
 import os
 
 from dotenv import load_dotenv
-
 from cryptography.fernet import Fernet
 
 from datetime import datetime, timedelta
@@ -34,6 +33,13 @@ load_dotenv()
 TOKEN = os.getenv("TOKEN")
 
 # =========================================================
+# BOT
+# =========================================================
+
+bot = Bot(TOKEN)
+dp = Dispatcher()
+
+# =========================================================
 # CONFIG
 # =========================================================
 
@@ -42,19 +48,10 @@ TWOFA_LIFETIME = 30
 MAX_ATTEMPTS = 3
 
 # =========================================================
-# BOT
-# =========================================================
-
-bot = Bot(TOKEN)
-
-dp = Dispatcher()
-
-# =========================================================
 # ENCRYPTION
 # =========================================================
 
 KEY = Fernet.generate_key()
-
 cipher = Fernet(KEY)
 
 def encrypt_text(text):
@@ -116,13 +113,10 @@ db.commit()
 # =========================================================
 
 upload_users = set()
-
-create_folder_users = set()
-
+folder_users = set()
 search_users = set()
 
 waiting_2fa = {}
-
 attempts = {}
 
 # =========================================================
@@ -228,6 +222,132 @@ def set_current_folder(
     db.commit()
 
 # =========================================================
+# SHOW CLOUD
+# =========================================================
+
+async def show_cloud(target, user_id):
+
+    current_folder = get_current_folder(
+        user_id
+    )
+
+    buttons = []
+
+    # =====================================================
+    # BACK
+    # =====================================================
+
+    if current_folder != "root":
+
+        buttons.append([
+            InlineKeyboardButton(
+                text="⬅️ Назад",
+                callback_data="back_root"
+            )
+        ])
+
+    # =====================================================
+    # FOLDERS
+    # =====================================================
+
+    if current_folder == "root":
+
+        cursor.execute(
+            """
+            SELECT name
+            FROM folders
+            WHERE user_id=?
+            """,
+            (user_id,)
+        )
+
+        folders = cursor.fetchall()
+
+        for folder in folders:
+
+            buttons.append([
+                InlineKeyboardButton(
+                    text=f"📂 {folder[0]}",
+                    callback_data=f"open:{folder[0]}"
+                )
+            ])
+
+    # =====================================================
+    # FILES
+    # =====================================================
+
+    cursor.execute(
+        """
+        SELECT file_name,
+               code
+        FROM files
+        WHERE owner_id=?
+        AND folder=?
+        """,
+        (
+            user_id,
+            current_folder
+        )
+    )
+
+    files = cursor.fetchall()
+
+    for file_name, code in files:
+
+        real_name = decrypt_text(
+            file_name
+        )
+
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"📄 {real_name}",
+                callback_data=f"file:{code}"
+            )
+        ])
+
+    # =====================================================
+    # EMPTY
+    # =====================================================
+
+    if not buttons:
+
+        buttons.append([
+            InlineKeyboardButton(
+                text="📭 Пусто",
+                callback_data="empty"
+            )
+        ])
+
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=buttons
+    )
+
+    text = f"""
+☁️ Folder:
+{current_folder}
+"""
+
+    try:
+
+        if isinstance(target, Message):
+
+            await target.answer(
+                text,
+                reply_markup=kb
+            )
+
+        else:
+
+            await target.message.edit_text(
+                text,
+                reply_markup=kb
+            )
+
+    except:
+
+        pass
+
+# =========================================================
 # START
 # =========================================================
 
@@ -314,10 +434,10 @@ async def start(message: Message):
         """
 🔥 FILESHIELD CLOUD
 
-☁️ Cloud
-📂 Folders
-📤 Upload
-🔗 Share
+☁️ Облако
+📂 Папки
+📤 Загрузка
+🔗 Share Links
 🛡 2FA
 """,
         reply_markup=main_kb
@@ -332,75 +452,9 @@ async def start(message: Message):
 )
 async def cloud(message: Message):
 
-    user_id = message.from_user.id
-
-    current_folder = get_current_folder(
-        user_id
-    )
-
-    cursor.execute(
-        """
-        SELECT name
-        FROM folders
-        WHERE user_id=?
-        """,
-        (user_id,)
-    )
-
-    folders = cursor.fetchall()
-
-    cursor.execute(
-        """
-        SELECT file_name,
-               code
-        FROM files
-        WHERE owner_id=?
-        AND folder=?
-        """,
-        (
-            user_id,
-            current_folder
-        )
-    )
-
-    files = cursor.fetchall()
-
-    buttons = []
-
-    # folders
-    for folder in folders:
-
-        buttons.append([
-            InlineKeyboardButton(
-                text=f"📂 {folder[0]}",
-                callback_data=f"open:{folder[0]}"
-            )
-        ])
-
-    # files
-    for file_name, code in files:
-
-        real_name = decrypt_text(
-            file_name
-        )
-
-        buttons.append([
-            InlineKeyboardButton(
-                text=f"📄 {real_name}",
-                callback_data=f"file:{code}"
-            )
-        ])
-
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=buttons
-    )
-
-    await message.answer(
-        f"""
-☁️ Folder:
-{current_folder}
-""",
-        reply_markup=kb
+    await show_cloud(
+        message,
+        message.from_user.id
     )
 
 # =========================================================
@@ -419,11 +473,46 @@ async def open_folder(call: CallbackQuery):
         folder
     )
 
-    await call.answer(
-        f"📂 {folder}"
+    await call.answer()
+
+    await show_cloud(
+        call,
+        call.from_user.id
     )
 
-    await cloud(call.message)
+# =========================================================
+# BACK
+# =========================================================
+
+@dp.callback_query(
+    F.data == "back_root"
+)
+async def back_root(call: CallbackQuery):
+
+    set_current_folder(
+        call.from_user.id,
+        "root"
+    )
+
+    await call.answer()
+
+    await show_cloud(
+        call,
+        call.from_user.id
+    )
+
+# =========================================================
+# EMPTY
+# =========================================================
+
+@dp.callback_query(
+    F.data == "empty"
+)
+async def empty(call: CallbackQuery):
+
+    await call.answer(
+        "📭 Пусто"
+    )
 
 # =========================================================
 # CREATE FOLDER
@@ -434,49 +523,12 @@ async def open_folder(call: CallbackQuery):
 )
 async def create_folder(message: Message):
 
-    create_folder_users.add(
+    folder_users.add(
         message.from_user.id
     )
 
     await message.answer(
         "📂 Введите название папки:"
-    )
-
-@dp.message(F.text)
-async def folder_input(message: Message):
-
-    user_id = message.from_user.id
-
-    if user_id not in create_folder_users:
-        return
-
-    create_folder_users.remove(user_id)
-
-    folder_name = message.text
-
-    cursor.execute(
-        """
-        INSERT INTO folders
-        (
-            user_id,
-            name
-        )
-        VALUES (?, ?)
-        """,
-        (
-            user_id,
-            folder_name
-        )
-    )
-
-    db.commit()
-
-    await message.answer(
-        f"""
-✅ Папка создана
-
-📂 {folder_name}
-"""
     )
 
 # =========================================================
@@ -493,65 +545,7 @@ async def search(message: Message):
     )
 
     await message.answer(
-        "🔎 Введите запрос:"
-    )
-
-@dp.message(F.text)
-async def search_input(message: Message):
-
-    user_id = message.from_user.id
-
-    if user_id not in search_users:
-        return
-
-    search_users.remove(user_id)
-
-    query = message.text.lower()
-
-    cursor.execute(
-        """
-        SELECT file_name,
-               code
-        FROM files
-        WHERE owner_id=?
-        """,
-        (user_id,)
-    )
-
-    files = cursor.fetchall()
-
-    buttons = []
-
-    for file_name, code in files:
-
-        real_name = decrypt_text(
-            file_name
-        )
-
-        if query in real_name.lower():
-
-            buttons.append([
-                InlineKeyboardButton(
-                    text=f"📄 {real_name}",
-                    callback_data=f"file:{code}"
-                )
-            ])
-
-    if not buttons:
-
-        await message.answer(
-            "❌ Ничего не найдено"
-        )
-
-        return
-
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=buttons
-    )
-
-    await message.answer(
-        "🔎 Результаты:",
-        reply_markup=kb
+        "🔎 Введите название файла:"
     )
 
 # =========================================================
@@ -649,6 +643,9 @@ async def upload_file(message: Message):
     await message.answer(
         f"""
 ✅ Файл загружен
+
+📂 Folder:
+{folder}
 
 🔗 LINK:
 {link}
@@ -858,94 +855,187 @@ async def delete(call: CallbackQuery):
     )
 
 # =========================================================
-# 2FA CHECK
+# TEXT HANDLER
 # =========================================================
 
 @dp.message(F.text)
-async def twofa_input(message: Message):
+async def text_handler(message: Message):
 
     user_id = message.from_user.id
+    text = message.text
 
-    if user_id not in waiting_2fa:
+    # =====================================================
+    # CREATE FOLDER
+    # =====================================================
+
+    if user_id in folder_users:
+
+        folder_users.remove(user_id)
+
+        cursor.execute(
+            """
+            INSERT INTO folders
+            (
+                user_id,
+                name
+            )
+            VALUES (?, ?)
+            """,
+            (
+                user_id,
+                text
+            )
+        )
+
+        db.commit()
+
+        await message.answer(
+            f"✅ Папка {text} создана"
+        )
+
         return
 
-    data = waiting_2fa[user_id]
+    # =====================================================
+    # SEARCH
+    # =====================================================
 
-    if datetime.now() > data["expires"]:
+    if user_id in search_users:
+
+        search_users.remove(user_id)
+
+        query = text.lower()
+
+        cursor.execute(
+            """
+            SELECT file_name,
+                   code
+            FROM files
+            WHERE owner_id=?
+            """,
+            (user_id,)
+        )
+
+        files = cursor.fetchall()
+
+        buttons = []
+
+        for file_name, code in files:
+
+            real_name = decrypt_text(
+                file_name
+            )
+
+            if query in real_name.lower():
+
+                buttons.append([
+                    InlineKeyboardButton(
+                        text=f"📄 {real_name}",
+                        callback_data=f"file:{code}"
+                    )
+                ])
+
+        if not buttons:
+
+            await message.answer(
+                "❌ Ничего не найдено"
+            )
+
+            return
+
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=buttons
+        )
+
+        await message.answer(
+            "🔎 Результаты:",
+            reply_markup=kb
+        )
+
+        return
+
+    # =====================================================
+    # 2FA
+    # =====================================================
+
+    if user_id in waiting_2fa:
+
+        data = waiting_2fa[user_id]
+
+        if datetime.now() > data["expires"]:
+
+            del waiting_2fa[user_id]
+
+            await message.answer(
+                "⌛ CODE истёк"
+            )
+
+            return
+
+        attempts[user_id] += 1
+
+        if attempts[user_id] >= MAX_ATTEMPTS:
+
+            del waiting_2fa[user_id]
+
+            await message.answer(
+                "🚫 Слишком много попыток"
+            )
+
+            return
+
+        if text != data["2fa"]:
+
+            await message.answer(
+                "❌ Неверный CODE"
+            )
+
+            return
+
+        code = data["code"]
+
+        cursor.execute(
+            """
+            SELECT file_id,
+                   file_name
+            FROM files
+            WHERE code=?
+            """,
+            (code,)
+        )
+
+        file_data = cursor.fetchone()
+
+        if not file_data:
+
+            await message.answer(
+                "❌ Файл удалён"
+            )
+
+            return
+
+        file_id, file_name = file_data
+
+        real_name = decrypt_text(
+            file_name
+        )
+
+        cursor.execute(
+            """
+            UPDATE files
+            SET downloads=downloads+1
+            WHERE code=?
+            """,
+            (code,)
+        )
+
+        db.commit()
+
+        await message.answer_document(
+            file_id,
+            caption=f"📦 {real_name}"
+        )
 
         del waiting_2fa[user_id]
-
-        await message.answer(
-            "⌛ CODE истёк"
-        )
-
-        return
-
-    attempts[user_id] += 1
-
-    if attempts[user_id] >= MAX_ATTEMPTS:
-
-        del waiting_2fa[user_id]
-
-        await message.answer(
-            "🚫 Слишком много попыток"
-        )
-
-        return
-
-    if message.text != data["2fa"]:
-
-        await message.answer(
-            "❌ Неверный CODE"
-        )
-
-        return
-
-    code = data["code"]
-
-    cursor.execute(
-        """
-        SELECT file_id,
-               file_name
-        FROM files
-        WHERE code=?
-        """,
-        (code,)
-    )
-
-    file_data = cursor.fetchone()
-
-    if not file_data:
-
-        await message.answer(
-            "❌ Файл удалён"
-        )
-
-        return
-
-    file_id, file_name = file_data
-
-    real_name = decrypt_text(
-        file_name
-    )
-
-    cursor.execute(
-        """
-        UPDATE files
-        SET downloads=downloads+1
-        WHERE code=?
-        """,
-        (code,)
-    )
-
-    db.commit()
-
-    await message.answer_document(
-        file_id,
-        caption=f"📦 {real_name}"
-    )
-
-    del waiting_2fa[user_id]
 
 # =========================================================
 # CLEANER
